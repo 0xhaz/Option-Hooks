@@ -45,7 +45,66 @@ contract VolumeTrackerHook is BaseHook, Access, Option {
         BaseHook(_poolManager)
         Access(_admin)
         Option(_uri)
-    {}
+    {
+        factor = _ratio;
+        OK = _okb;
+        id = PoolKey(Currency.wrap(address(0)), Currency.wrap(address(_okb)), 3000, 60, IHooks(address(this))).toId();
+    }
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: false,
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: false,
+            afterSwap: true,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
+    }
+
+    // -----------------------------------------------
+    // NOTE: see IHooks.sol for function documentation
+    // -----------------------------------------------
+
+    function afterSwap(
+        address,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata swapParams,
+        BalanceDelta delta,
+        bytes calldata hookdata
+    ) external override returns (bytes4, int128) {
+        // The address which should receive the option be set as an input in hookdata
+        address user = abi.decode(hookdata, (address));
+
+        if (Currency.wrap(address(0)) < Currency.wrap(OK)) {
+            // If this is not an ETH-OKB pool with this hook attached, ignore
+            if (!key.currency0.isNative() && Currency.unwrap(key.currency1) != OK) return (this.afterSwap.selector, 0);
+
+            // We only consider swaps in one direction (in our case when user buys OKB)
+            if (!swapParams.zeroForOne) return (this.afterSwap.selector, 0);
+        } else {
+            // If this is not an OKB-ETH pool with this hook attached, ignore
+            if (!key.currency1.isNative() && Currency.unwrap(key.currency0) != OK) return (this.afterSwap.selector, 0);
+
+            // We only consider swaps in one direction (in our case when user buys OKB
+            if (swapParams.zeroForOne) return (this.afterSwap.selector, 0);
+        }
+
+        // if amountSpecified < 0;
+        //    this is an "exact input for output" swap
+        //    amount of tokens they spent is equal to [amountSpecified]
+        // if amountSpecified > 0;
+        //    this is an "exact output for input" swap
+        //    amount of tokens they spent is equal to BalanceDelta.amount0()
+    }
 
     function supportsInterface(bytes4 interfaceId) public view virtual override(AccessControl, Option) returns (bool) {
         return super.supportsInterface(interfaceId);

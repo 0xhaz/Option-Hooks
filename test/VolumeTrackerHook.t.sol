@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: SEE LICENSE IN LICENSE
+pragma solidity ^0.8.25;
+
+import {Test, console} from "forge-std/Test.sol";
+import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
+import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
+import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
+import {PoolManager} from "v4-core/PoolManager.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
+import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {TickMath} from "v4-core/libraries/TickMath.sol";
+import {VolumeTrackerHook} from "src/VolumeTrackerHook.sol";
+import {NarrativeController} from "src/NarrativeController.sol";
+import {Option} from "src/Option.sol";
+import {TickPriceLib} from "src/libraries/TickPriceLib.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {HookMiner} from "test/utils/HookMiner.sol";
+
+contract TestVolumeTrackerHook is Test, Deployers {
+    using PoolIdLibrary for PoolKey;
+    using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
+
+    MockERC20 token;
+    VolumeTrackerHook hook;
+    NarrativeController narrativeController;
+
+    Currency ethCurrency = Currency.wrap(address(0));
+    Currency tokenCurrency;
+
+    uint256 internal devPrivateKey = 0xde111;
+    uint256 internal okbPrivateKey = 0x1111;
+    uint256 internal userPrivateKey = 0xad1111;
+
+    address internal user = vm.addr(userPrivateKey);
+    address internal dev = vm.addr(devPrivateKey);
+    address internal okb = vm.addr(okbPrivateKey);
+
+    function setUp() public {
+        // creates the pool manager, utility routers, and test tokens
+        Deployers.deployFreshManagerAndRouters();
+
+        // Deploy our OKB token contract
+        token = new MockERC20("OKB Token", "OKB", 18);
+        tokenCurrency = Currency.wrap(address(token));
+
+        // Mint a bunch of TOKEN to the dev
+        token.mint(address(this), 1000 ether);
+
+        // Deploy the hook to an address with the correct flag
+        uint160 flags = uint160(Hooks.AFTER_SWAP_FLAG);
+        (address hookAddress, bytes32 salt) = HookMiner.find(
+            address(this),
+            flags,
+            type(VolumeTrackerHook).creationCode,
+            abi.encode(address(manager), "", 1, address(token), dev)
+        );
+
+        hook = new VolumeTrackerHook{salt: salt}(IPoolManager(address(manager)), "", 1, address(token), dev);
+        require(address(hook) == hookAddress, "hook address mismatch");
+
+        // Approve our token for spending on the swap router and modify liquidity router
+        // These variables are coming from the `Deployers` contract
+        token.approve(address(swapRouter), type(uint256).max);
+        token.approve(address(modifyLiquidityRouter), type(uint256).max);
+
+        // Create the pool
+        key = PoolKey(ethCurrency, tokenCurrency, 3000, 60, IHooks(address(hook)));
+        manager.initialize(key, SQRT_PRICE_1_1, ZERO_BYTES);
+
+        // Deploy NarrativeController contract
+        narrativeController = new NarrativeController(dev, IERC20(address(token)), Option(hook), key, swapRouter);
+
+        // Mint a bunch of Token to the narrative controller
+        token.mint(address(narrativeController), 1000 ether);
+
+        // Provide liquidity to the pool
+        // How we landed on 0.003 ether here is based on computing value of x and y given
+        // total value of delta L (liquidity delta) = 1 ether
+        // This is done by computing x and y from the equation shown in Ticks and Q64.96 Numbers
+        modifyLiquidityRouter.modifyLiquidity{value: 0.003 ether}(
+            key,
+            IPoolManager.ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1 ether, salt: 0}),
+            ZERO_BYTES
+        );
+    }
+}

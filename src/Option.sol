@@ -189,7 +189,13 @@ abstract contract Option is ERC1155, ERC1155Supply, ERC1155Burnable, AccessContr
         super._update(from_, to_, ids_, values_);
     }
 
-    function supportsInterface(bytes4 interfaceId) public view override(ERC1155, AccessControl) returns (bool) {
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        virtual
+        override(ERC1155, AccessControl)
+        returns (bool)
+    {
         return super.supportsInterface(interfaceId);
     }
 }

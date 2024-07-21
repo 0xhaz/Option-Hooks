@@ -89,5 +89,116 @@ contract TestVolumeTrackerHook is Test, Deployers {
             IPoolManager.ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1 ether, salt: 0}),
             ZERO_BYTES
         );
+
+        bytes memory hookData = abi.encode(address(user));
+
+        swapRouter.swap{value: 0.001 ether}(
+            key,
+            IPoolManager.SwapParams({
+                zeroForOne: true,
+                amountSpecified: -0.001 ether, // exact input for output swap
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: true, settleUsingBurn: false}),
+            hookData
+        );
+    }
+
+    function test_mintOption() public view {
+        // Confirm that the option was issued
+        assertEq(hook.isOptionTokenValid(1), true);
+
+        // These values were calculated from logging the values directly from the hook
+        uint256 strikePrice1 = 251693749733777908291279597518;
+        uint256 expiryPrice1 = 24889615696832107675131794113;
+
+        // Get the values of the option from the tokenId
+        (bool void, uint256 tokenId, uint256 strikePrice, uint256 expiryPrice) = hook.tokenId2Option(1);
+
+        assertEq(void, false);
+        assertEq(strikePrice, strikePrice1);
+        assertEq(expiryPrice, expiryPrice1);
+        assertEq(tokenId, 1);
+
+        // Confirm that the tokenId corresponds to the strike and expiry price
+        assertEq(hook.getTokenId(strikePrice, expiryPrice), 1);
+
+        // Confirm that there is one valid option with the expiry price
+        assertEq(hook.getNumberOfValidToken(expiryPrice), 1);
+    }
+
+    function test_redeemInNarrativeController_WithoutBuyBack() public {
+        console.log(token.balanceOf(address(narrativeController)));
+        console.log(hook.balanceOf(address(user), 1));
+        assertEq(hook.isOptionTokenValid(1), true);
+
+        (,, uint256 strikePrice,) = hook.tokenId2Option(1);
+
+        // Let's consider that the user want to redeem the entire option
+        uint256 amount = hook.balanceOf(address(user), 1);
+
+        console.log(TickPriceLib.getQuoteAtSqrtPrice(uint160(strikePrice), uint128(amount), address(token), address(0)));
+
+        uint256 ethToSend =
+            TickPriceLib.getQuoteAtSqrtPrice(uint160(strikePrice), uint128(amount), address(token), address(0));
+
+        // User want to redeem the option
+        vm.startPrank(user);
+        vm.deal(user, 1 ether);
+
+        // Get the balance of the user of ETH and ok
+        assertEq(token.balanceOf(address(user)), 0);
+        assertEq(user.balance, 1 ether);
+
+        hook.setApprovalForAll(address(narrativeController), true);
+        (bool success,) = address(narrativeController).call{value: ethToSend}(
+            abi.encodeWithSignature("exerciseOptionByTokenId(uint256,uint256)", 1, amount)
+        );
+        require(success, "exerciseOptionByTokenId failed");
+
+        // Check that balance were updated accordingly
+        assertEq(token.balanceOf(address(user)), amount);
+        assertEq(user.balance, 1 ether - ethToSend);
+        vm.stopPrank();
+    }
+
+    function test_redeemInNarrativeController_WithBuyBack() public {
+        assertEq(hook.isOptionTokenValid(1), true);
+
+        (,, uint256 strikePrice,) = hook.tokenId2Option(1);
+
+        // Enable buy back
+        vm.startPrank(dev);
+        assertEq(narrativeController.buyBackHookControl(), false);
+        narrativeController.setBuyBack(true);
+        assertEq(narrativeController.buyBackHookControl(), true);
+        vm.stopPrank();
+
+        // Let's consider that the user want to redeem the entire option
+        uint256 amount = hook.balanceOf(address(user), 1);
+
+        console.log(TickPriceLib.getQuoteAtSqrtPrice(uint160(strikePrice), uint128(amount), address(token), address(0)));
+
+        uint256 ethToSend =
+            TickPriceLib.getQuoteAtSqrtPrice(uint160(strikePrice), uint128(amount), address(token), address(0));
+
+        // User want to redeem the option
+        vm.startPrank(user);
+        vm.deal(user, 1 ether);
+
+        // Get the balance of the user of ETH and ok
+        assertEq(token.balanceOf(address(user)), 0);
+        assertEq(user.balance, 1 ether);
+
+        hook.setApprovalForAll(address(narrativeController), true);
+        (bool success,) = address(narrativeController).call{value: ethToSend}(
+            abi.encodeWithSignature("exerciseOptionByTokenId(uint256,uint256)", 1, amount)
+        );
+        require(success, "exerciseOptionByTokenId failed");
+
+        // Check that balance were updated accordingly
+        assertEq(token.balanceOf(address(user)), amount);
+        assertEq(user.balance, 1 ether - ethToSend);
+        vm.stopPrank();
     }
 }
